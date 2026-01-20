@@ -2,15 +2,20 @@
   "hooks": {
     "PostToolUse": [
       {
+        "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/lint.sh",
-            "timeout": 60,
-            "type": "command"
+            "timeout": 60
           }
-        ],
-        "matcher": "Edit|Write|MultiEdit"
+        ]
       }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)"
     ]
   }
 }
