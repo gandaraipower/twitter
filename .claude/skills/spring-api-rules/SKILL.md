@@ -8,19 +8,44 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, LSP
 
 이 프로젝트의 REST API 개발을 위한 범용 규칙입니다.
 
-## 📦 패키지 구조 (참고용)
+## 📦 패키지 구조 (도메인형 - 필수!)
+
+**⚠️ 반드시 도메인 완전 분리형 구조를 사용하세요.**
 
 ```
 com.example.project
-├── controller/              # 표현 계층 (REST API)
-│   └── dto/                 # 데이터 전송 객체 (Request/Response)
-├── domain/                  # 비즈니스 계층 (도메인 주도 설계)
-│   └── {domain_name}/       # 예: 'user', 'board'
-│       ├── {Domain}.java          # 엔티티
-│       ├── {Domain}Repository.java
-│       ├── {Domain}Service.java
-│       └── {Domain}Exception.java
-└── config/                  # 전역 설정
+├── {domain}/                    # 도메인별 패키지 (예: post, user, order)
+│   ├── controller/
+│   │   └── {Domain}Controller.java
+│   ├── dto/
+│   │   ├── {Domain}Request.java
+│   │   └── {Domain}Response.java
+│   ├── domain/
+│   │   └── {Domain}.java        # 엔티티
+│   ├── repository/
+│   │   └── {Domain}Repository.java
+│   └── service/
+│       └── {Domain}Service.java
+├── common/                      # 공통 모듈 (예외, 유틸 등)
+│   └── exception/
+└── config/                      # 전역 설정
+```
+
+### 예시: Post 도메인
+```
+com.apiece.twitter
+└── post/
+    ├── controller/
+    │   └── PostController.java
+    ├── dto/
+    │   ├── PostRequest.java
+    │   └── PostResponse.java
+    ├── domain/
+    │   └── Post.java
+    ├── repository/
+    │   └── PostRepository.java
+    └── service/
+        └── PostService.java
 ```
 
 ## 🔑 핵심 공통 규칙
@@ -32,28 +57,64 @@ com.example.project
 
 ## 🎮 컨트롤러 (Controller)
 
+-   **위치:** `{domain}/controller/` 패키지
 -   `@RestController` 사용.
 -   클래스 레벨에 `@RequestMapping` 금지. 메서드에 전체 경로 명시.
 -   반환 타입은 항상 `ResponseEntity<T>` 사용.
 -   네이밍: `{Domain}Controller`
 -   **✅ 주석 필수:** 각 엔드포인트 메서드 바로 위에 API 기능을 설명하는 한 줄 주석을 작성하세요.
-    ```java
-    // 게시글 전체 조회 API
-    @GetMapping("/api/v1/posts")
-    public ResponseEntity<List<PostResponse>> getAllPosts() { ... }
-    ```
+
+### ResponseEntity 상태 코드 (중요!)
+-   **⚠️ 반드시 `ResponseEntity.status(HttpStatus.XXX).body()` 형식 사용**
+-   `.ok()` 같은 축약형 금지
+
+| HTTP Method | 상태 코드 | 사용법 |
+|-------------|-----------|--------|
+| GET | `HttpStatus.OK` (200) | `ResponseEntity.status(HttpStatus.OK).body(data)` |
+| POST | `HttpStatus.CREATED` (201) | `ResponseEntity.status(HttpStatus.CREATED).body(data)` |
+| PUT/PATCH | `HttpStatus.OK` (200) | `ResponseEntity.status(HttpStatus.OK).body(data)` |
+| DELETE | `HttpStatus.NO_CONTENT` (204) | `ResponseEntity.status(HttpStatus.NO_CONTENT).build()` |
+
+### 컨트롤러 예시
+```java
+package com.apiece.twitter.post.controller;
+
+// 게시글 전체 조회 API (페이징)
+@GetMapping("/api/posts")
+public ResponseEntity<Page<PostResponse>> getAllPosts(
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "10") int size) {
+    Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
+    return ResponseEntity.status(HttpStatus.OK).body(postService.getAllPosts(pageable));
+}
+
+// 게시글 작성 API
+@PostMapping("/api/posts")
+public ResponseEntity<PostResponse> createPost(@RequestBody PostRequest request) {
+    return ResponseEntity.status(HttpStatus.CREATED).body(postService.createPost(request));
+}
+
+// 게시글 삭제 API
+@DeleteMapping("/api/posts/{id}")
+public ResponseEntity<Void> deletePost(@PathVariable Long id) {
+    postService.deletePost(id);
+    return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
+}
+```
 
 ## 📨 DTO 전략 (중요!)
 
 ### 필수 규칙
+-   **위치:** `{domain}/dto/` 패키지
 -   **⚠️ 반드시 Java `record` 사용 (class 금지!)**
--   컨트롤러용 DTO는 `controller/dto` 패키지에 위치.
 -   비즈니스 로직 포함 금지.
 
 ### Request DTO
 -   **⚠️ `toEntity()` 메서드 필수 구현**
 -   Service에서 `request.toEntity()` 형태로 사용
     ```java
+    package com.apiece.twitter.post.dto;
+
     public record PostRequest(
             String content,
             String author
@@ -71,6 +132,8 @@ com.example.project
 -   **⚠️ `static from(Entity)` 팩토리 메서드 필수 구현**
 -   Service에서 `PostResponse.from(entity)` 또는 `.map(PostResponse::from)` 형태로 사용
     ```java
+    package com.apiece.twitter.post.dto;
+
     public record PostResponse(
             Long id,
             String content,
@@ -91,11 +154,9 @@ com.example.project
 ### Service에서 DTO 사용 예시
 ```java
 // 조회 - PostResponse.from() 사용
-public List<PostResponse> getAllPosts() {
-    return postRepository.findAll()
-            .stream()
-            .map(PostResponse::from)  // new PostResponse() 금지!
-            .toList();
+public Page<PostResponse> getAllPosts(Pageable pageable) {
+    return postRepository.findAll(pageable)
+            .map(PostResponse::from);  // new PostResponse() 금지!
 }
 
 // 생성 - request.toEntity() 사용
@@ -113,12 +174,18 @@ public PostResponse createPost(PostRequest request) {
 ## 🏢 도메인 계층 (Domain)
 
 ### 1. 엔티티 (Entity)
+-   **위치:** `{domain}/domain/` 패키지
 -   `protected` 기본 생성자 필수.
 -   `@GeneratedValue(strategy = GenerationType.IDENTITY)`.
 -   모든 연관관계는 `FetchType.LAZY`.
 -   `@JoinColumn` 사용 (물리적 FK 제약은 상황에 따라 제외 가능).
 
-### 2. 서비스 (Service)
+### 2. 리포지토리 (Repository)
+-   **위치:** `{domain}/repository/` 패키지
+-   `JpaRepository<Entity, ID>` 확장.
+
+### 3. 서비스 (Service)
+-   **위치:** `{domain}/service/` 패키지
 -   **쓰기(Create, Update, Delete):** `@Transactional` 필수.
 -   **읽기(Read):** 단순 조회는 트랜잭션 불필요. 복잡한 조회만 `@Transactional(readOnly = true)`.
 -   도메인별 예외(`{Domain}Exception`)를 만들고 `@RestControllerAdvice`로 처리.
@@ -134,11 +201,11 @@ public PostResponse createPost(PostRequest request) {
 이 프로젝트는 **팀 프로젝트**이므로 다음 규칙을 엄격히 준수하세요:
 
 1.  **범위 확인:** 작업 시작 전, 사용자가 어떤 도메인(기능)을 작업 중인지 파악하세요.
-2.  **격리 (Isolation):** 사용자의 작업 도메인 외부 파일은 **절대 수정하지 마세요.**
-    -   (예: `User` 작업 중이면 `Post` 패키지 건드리지 말 것)
-3.  **동의 구하기:** 공통 모듈이나 다른 사람의 도메인을 수정해야 한다면 반드시 먼저 물어보세요.
+2.  **격리 (Isolation):** 사용자의 작업 도메인 외부 패키지는 **절대 수정하지 마세요.**
+    -   (예: `post/` 작업 중이면 `user/` 패키지 건드리지 말 것)
+3.  **동의 구하기:** `common/` 모듈이나 다른 사람의 도메인을 수정해야 한다면 반드시 먼저 물어보세요.
 
 ## 🧪 테스트 스크립트
 
 API 개발 시 `src/main/resources/http/` 경로에 curl 스크립트 생성을 권장합니다.
--   파일명: `{resource}.sh` (예: `orders.sh`)
+-   파일명: `{resource}.sh` (예: `posts.sh`)

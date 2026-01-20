@@ -1,4 +1,4 @@
-package com.apiece.twitter.entity;
+package com.apiece.twitter.post.domain;
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;

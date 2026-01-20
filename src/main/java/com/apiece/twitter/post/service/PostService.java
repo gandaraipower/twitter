@@ -1,14 +1,15 @@
-package com.apiece.twitter.service;
+package com.apiece.twitter.post.service;
 
-import com.apiece.twitter.dto.PostRequest;
-import com.apiece.twitter.dto.PostResponse;
-import com.apiece.twitter.entity.Post;
-import com.apiece.twitter.repository.PostRepository;
+import com.apiece.twitter.post.dto.PostRequest;
+import com.apiece.twitter.post.dto.PostResponse;
+import com.apiece.twitter.post.domain.Post;
+import com.apiece.twitter.post.repository.PostRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 @Service
 @RequiredArgsConstructor
@@ -17,12 +18,10 @@ public class PostService {
 
     private final PostRepository postRepository;
 
-    // 전체 게시글을 최신순으로 조회
-    public List<PostResponse> getAllPosts() {
-        return postRepository.findAllByOrderByCreatedAtDesc()
-                .stream()
-                .map(PostResponse::from)
-                .toList();
+    // 전체 게시글을 최신순으로 조회 (페이징)
+    public Page<PostResponse> getAllPosts(Pageable pageable) {
+        return postRepository.findAll(pageable)
+                .map(PostResponse::from);
     }
 
     // ID로 게시글 단건 조회

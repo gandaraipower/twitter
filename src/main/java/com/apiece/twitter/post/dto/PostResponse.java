@@ -1,6 +1,6 @@
-package com.apiece.twitter.dto;
+package com.apiece.twitter.post.dto;
 
-import com.apiece.twitter.entity.Post;
+import com.apiece.twitter.post.domain.Post;
 
 import java.time.LocalDateTime;
 
