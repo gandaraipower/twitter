@@ -566,7 +566,409 @@ tasks.jar {
   - `프로젝트명-버전-plain.jar` (일반 JAR, 실행 불가)
 - 위 설정으로 실행 가능한 Boot JAR만 생성됩니다.
 
-## 🧪 테스트 스크립트
+## 🧪 테스트 코드 자동 생성 (필수!)
+
+**⚠️ 새로운 도메인(post, user 등)을 생성할 때 반드시 테스트 코드도 함께 생성해야 합니다.**
+
+### 테스트 패키지 구조
+
+```
+src/test/java/com/{project}/{domain}/
+├── domain/
+│   └── {Domain}Test.java           # 엔티티 단위 테스트
+├── repository/
+│   └── {Domain}RepositoryTest.java # 리포지토리 테스트 (@DataJpaTest)
+├── service/
+│   └── {Domain}ServiceTest.java    # 서비스 단위 테스트 (Mockito)
+└── controller/
+    └── {Domain}ControllerTest.java # 컨트롤러 통합 테스트 (@SpringBootTest)
+```
+
+### 테스트 환경 설정
+
+-   **테스트 DB:** H2 인메모리 (`src/test/resources/application.yaml`)
+-   **ddl-auto:** `create-drop` (테스트마다 초기화)
+
+### 1. 엔티티 테스트 ({Domain}Test.java)
+
+-   **어노테이션:** 없음 (순수 단위 테스트)
+-   **테스트 항목:** 엔티티 생성, 비즈니스 메서드
+
+```java
+package com.apiece.twitter.post.domain;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DisplayName("Post 엔티티 테스트")
+class PostTest {
+
+    @Test
+    @DisplayName("Post 엔티티 생성 - Builder 패턴")
+    void createPost() {
+        // given
+        String content = "테스트 게시글 내용입니다.";
+        String author = "홍길동";
+
+        // when
+        Post post = Post.builder()
+                .content(content)
+                .author(author)
+                .build();
+
+        // then
+        assertThat(post.getContent()).isEqualTo(content);
+        assertThat(post.getAuthor()).isEqualTo(author);
+    }
+
+    @Test
+    @DisplayName("Post 내용 수정")
+    void updateContent() {
+        // given
+        Post post = Post.builder()
+                .content("원래 내용")
+                .author("홍길동")
+                .build();
+        String newContent = "수정된 내용";
+
+        // when
+        post.updateContent(newContent);
+
+        // then
+        assertThat(post.getContent()).isEqualTo(newContent);
+    }
+}
+```
+
+### 2. 리포지토리 테스트 ({Domain}RepositoryTest.java)
+
+-   **어노테이션:** `@DataJpaTest`
+-   **테스트 항목:** CRUD, 페이징, 커스텀 쿼리
+
+```java
+package com.apiece.twitter.post.repository;
+
+import com.apiece.twitter.post.domain.Post;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DataJpaTest
+@DisplayName("PostRepository 테스트")
+class PostRepositoryTest {
+
+    @Autowired
+    private PostRepository postRepository;
+
+    @Test
+    @DisplayName("게시글 저장")
+    void save() {
+        // given
+        Post post = Post.builder()
+                .content("테스트 게시글")
+                .author("홍길동")
+                .build();
+
+        // when
+        Post savedPost = postRepository.save(post);
+
+        // then
+        assertThat(savedPost.getId()).isNotNull();
+        assertThat(savedPost.getContent()).isEqualTo("테스트 게시글");
+    }
+
+    @Test
+    @DisplayName("게시글 ID로 조회")
+    void findById() {
+        // given
+        Post post = postRepository.save(Post.builder()
+                .content("테스트 게시글")
+                .author("홍길동")
+                .build());
+
+        // when
+        Optional<Post> foundPost = postRepository.findById(post.getId());
+
+        // then
+        assertThat(foundPost).isPresent();
+        assertThat(foundPost.get().getContent()).isEqualTo("테스트 게시글");
+    }
+
+    @Test
+    @DisplayName("게시글 페이징 조회")
+    void findAllWithPaging() {
+        // given
+        for (int i = 1; i <= 15; i++) {
+            postRepository.save(Post.builder()
+                    .content("게시글 " + i)
+                    .author("작성자" + i)
+                    .build());
+        }
+        PageRequest pageRequest = PageRequest.of(0, 10, Sort.by("id").descending());
+
+        // when
+        Page<Post> postPage = postRepository.findAll(pageRequest);
+
+        // then
+        assertThat(postPage.getContent()).hasSize(10);
+        assertThat(postPage.getTotalElements()).isEqualTo(15);
+        assertThat(postPage.getTotalPages()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("게시글 삭제")
+    void delete() {
+        // given
+        Post post = postRepository.save(Post.builder()
+                .content("삭제할 게시글")
+                .author("홍길동")
+                .build());
+        Long postId = post.getId();
+
+        // when
+        postRepository.delete(post);
+
+        // then
+        Optional<Post> deletedPost = postRepository.findById(postId);
+        assertThat(deletedPost).isEmpty();
+    }
+}
+```
+
+### 3. 서비스 테스트 ({Domain}ServiceTest.java)
+
+-   **어노테이션:** `@ExtendWith(MockitoExtension.class)`
+-   **Mock:** `@Mock` (Repository), `@InjectMocks` (Service)
+-   **테스트 항목:** 비즈니스 로직, 예외 처리
+
+```java
+package com.apiece.twitter.post.service;
+
+import com.apiece.twitter.post.domain.Post;
+import com.apiece.twitter.post.dto.PostRequest;
+import com.apiece.twitter.post.dto.PostResponse;
+import com.apiece.twitter.post.repository.PostRepository;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
+
+@ExtendWith(MockitoExtension.class)
+@DisplayName("PostService 테스트")
+class PostServiceTest {
+
+    @InjectMocks
+    private PostService postService;
+
+    @Mock
+    private PostRepository postRepository;
+
+    @Test
+    @DisplayName("게시글 전체 조회 - 페이징")
+    void getAllPosts() {
+        // given
+        Pageable pageable = PageRequest.of(0, 10);
+        List<Post> posts = List.of(
+                createPost(1L, "게시글 1", "작성자1"),
+                createPost(2L, "게시글 2", "작성자2")
+        );
+        Page<Post> postPage = new PageImpl<>(posts, pageable, posts.size());
+        given(postRepository.findAll(pageable)).willReturn(postPage);
+
+        // when
+        Page<PostResponse> result = postService.getAllPosts(pageable);
+
+        // then
+        assertThat(result.getContent()).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("게시글 단건 조회 - 존재하지 않는 게시글")
+    void getPost_NotFound() {
+        // given
+        Long postId = 999L;
+        given(postRepository.findById(postId)).willReturn(Optional.empty());
+
+        // when & then
+        assertThatThrownBy(() -> postService.getPost(postId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Post not found");
+    }
+
+    @Test
+    @DisplayName("게시글 작성")
+    void createPost() {
+        // given
+        PostRequest request = new PostRequest("새 게시글", "홍길동");
+        Post savedPost = createPost(1L, "새 게시글", "홍길동");
+        given(postRepository.save(any(Post.class))).willReturn(savedPost);
+
+        // when
+        PostResponse result = postService.createPost(request);
+
+        // then
+        assertThat(result.content()).isEqualTo("새 게시글");
+        verify(postRepository).save(any(Post.class));
+    }
+
+    // 테스트용 Post 엔티티 생성 헬퍼 메서드 (Reflection 사용)
+    private Post createPost(Long id, String content, String author) {
+        Post post = Post.builder()
+                .content(content)
+                .author(author)
+                .build();
+        try {
+            java.lang.reflect.Field idField = Post.class.getDeclaredField("id");
+            idField.setAccessible(true);
+            idField.set(post, id);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return post;
+    }
+}
+```
+
+### 4. 컨트롤러 테스트 ({Domain}ControllerTest.java)
+
+-   **어노테이션:** `@SpringBootTest`, `@AutoConfigureMockMvc`
+-   **Mock:** `@MockitoBean` (Service) - Spring Boot 3.4+ 사용
+-   **테스트 항목:** API 엔드포인트, HTTP 상태 코드, 응답 형식
+
+```java
+package com.apiece.twitter.post.controller;
+
+import com.apiece.twitter.post.dto.PostRequest;
+import com.apiece.twitter.post.dto.PostResponse;
+import com.apiece.twitter.post.service.PostService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+@DisplayName("PostController 테스트")
+class PostControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @MockitoBean
+    private PostService postService;
+
+    @Test
+    @DisplayName("GET /api/posts - 게시글 전체 조회")
+    void getAllPosts() throws Exception {
+        // given
+        List<PostResponse> posts = List.of(
+                createPostResponse(1L, "게시글 1", "작성자1"),
+                createPostResponse(2L, "게시글 2", "작성자2")
+        );
+        Page<PostResponse> postPage = new PageImpl<>(posts);
+        given(postService.getAllPosts(any(Pageable.class))).willReturn(postPage);
+
+        // when & then
+        mockMvc.perform(get("/api/posts")
+                        .param("page", "0")
+                        .param("size", "10"))
+                .andDo(print())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("200"))
+                .andExpect(jsonPath("$.data.content").isArray());
+    }
+
+    @Test
+    @DisplayName("POST /api/posts - 게시글 작성")
+    void createPost() throws Exception {
+        // given
+        PostRequest request = new PostRequest("새 게시글", "홍길동");
+        PostResponse response = createPostResponse(1L, "새 게시글", "홍길동");
+        given(postService.createPost(any(PostRequest.class))).willReturn(response);
+
+        // when & then
+        mockMvc.perform(post("/api/posts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andDo(print())
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value("200"))  // ApiResponse.success()는 항상 "200"
+                .andExpect(jsonPath("$.data.content").value("새 게시글"));
+    }
+
+    // 테스트용 PostResponse 생성 헬퍼 메서드
+    private PostResponse createPostResponse(Long id, String content, String author) {
+        return new PostResponse(id, content, author, LocalDateTime.now(), LocalDateTime.now());
+    }
+}
+```
+
+### 테스트 작성 규칙
+
+1.  **Given-When-Then 패턴:** 모든 테스트는 `// given`, `// when`, `// then` 구조 사용
+2.  **DisplayName:** `@DisplayName`으로 한글 테스트 설명 작성
+3.  **AssertJ:** `assertThat()` 사용 (JUnit Assertions 대신)
+4.  **BDDMockito:** `given().willReturn()` 스타일 사용
+
+### 테스트 실행
+
+```bash
+# 전체 테스트 실행
+./gradlew test
+
+# 특정 도메인 테스트만 실행
+./gradlew test --tests "com.apiece.twitter.post.*"
+
+# 특정 테스트 클래스만 실행
+./gradlew test --tests "com.apiece.twitter.post.service.PostServiceTest"
+```
+
+## 📜 curl 테스트 스크립트
 
 API 개발 시 `src/main/resources/http/` 경로에 curl 스크립트 생성을 권장합니다.
 -   파일명: `{resource}.sh` (예: `posts.sh`)
