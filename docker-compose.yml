@@ -1,0 +1,31 @@
+services:
+  mysql-twitter:
+    container_name: mysql-twitter
+    image: mysql:9.3
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: twitterdb
+      MYSQL_USER: dev
+      MYSQL_PASSWORD: dev123
+    ports:
+      - "3306:3306"
+    networks:
+      - twitter-network
+
+  springboot-twitter:
+    container_name: springboot-twitter
+    image: twitter:latest
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql-twitter:3306/twitterdb
+      SPRING_DATASOURCE_USERNAME: dev
+      SPRING_DATASOURCE_PASSWORD: dev123
+    depends_on:
+      - mysql-twitter
+    networks:
+      - twitter-network
+
+networks:
+  twitter-network:
+    driver: bridge

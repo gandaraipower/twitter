@@ -535,6 +535,37 @@ spring:
 -   테스트와 운영 설정 파일은 반드시 분리할 것
 -   민감한 정보(password 등)는 환경변수 또는 외부 설정 사용 권장
 
+## 🔨 빌드 설정 (Build Configuration)
+
+### 빌드 전 필수 확인사항
+
+#### 1. ddl-auto 설정 변경 (필수!)
+**⚠️ 빌드 시 반드시 `application.yaml`의 `ddl-auto`를 `update`로 변경하세요.**
+
+```yaml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: update  # 빌드 시 반드시 update로!
+```
+
+> **주의**: `create`, `create-drop` 설정으로 빌드하면 제대로 실행이 안됩니다.
+
+#### 2. 일반 JAR 생성 비활성화 (필수!)
+실행 가능한 Boot JAR만 필요하므로 `build.gradle.kts`에 다음 설정을 추가하세요.
+
+```kotlin
+tasks.jar {
+    enabled = false
+}
+```
+
+**왜 필요한가?**
+- 이 설정이 없으면 빌드 시 두 개의 JAR 파일이 생성됨:
+  - `프로젝트명-버전.jar` (실행 가능한 Boot JAR)
+  - `프로젝트명-버전-plain.jar` (일반 JAR, 실행 불가)
+- 위 설정으로 실행 가능한 Boot JAR만 생성됩니다.
+
 ## 🧪 테스트 스크립트
 
 API 개발 시 `src/main/resources/http/` 경로에 curl 스크립트 생성을 권장합니다.
