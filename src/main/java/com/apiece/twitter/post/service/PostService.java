@@ -1,5 +1,7 @@
 package com.apiece.twitter.post.service;
 
+import com.apiece.twitter.global.exception.BusinessException;
+import com.apiece.twitter.global.response.ErrorCode;
 import com.apiece.twitter.post.dto.PostRequest;
 import com.apiece.twitter.post.dto.PostResponse;
 import com.apiece.twitter.post.domain.Post;
@@ -27,7 +29,7 @@ public class PostService {
     // ID로 게시글 단건 조회
     public PostResponse getPost(Long id) {
         Post post = postRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Post not found: " + id));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_POST));
         return PostResponse.from(post);
     }
 
@@ -43,7 +45,7 @@ public class PostService {
     @Transactional
     public PostResponse updatePost(Long id, PostRequest request) {
         Post post = postRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Post not found: " + id));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_POST));
         post.updateContent(request.content());
         return PostResponse.from(post);
     }
@@ -52,7 +54,7 @@ public class PostService {
     @Transactional
     public void deletePost(Long id) {
         Post post = postRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Post not found: " + id));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_POST));
         postRepository.delete(post);
     }
 }

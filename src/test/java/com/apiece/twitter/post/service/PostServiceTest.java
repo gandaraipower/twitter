@@ -1,5 +1,7 @@
 package com.apiece.twitter.post.service;
 
+import com.apiece.twitter.global.exception.BusinessException;
+import com.apiece.twitter.global.response.ErrorCode;
 import com.apiece.twitter.post.domain.Post;
 import com.apiece.twitter.post.dto.PostRequest;
 import com.apiece.twitter.post.dto.PostResponse;
@@ -79,8 +81,11 @@ class PostServiceTest {
 
         // when & then
         assertThatThrownBy(() -> postService.getPost(postId))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Post not found");
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND_POST);
+                });
     }
 
     @Test

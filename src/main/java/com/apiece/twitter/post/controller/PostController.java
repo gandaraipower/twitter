@@ -6,6 +6,9 @@ import com.apiece.twitter.post.dto.PostResponse;
 import com.apiece.twitter.post.service.PostService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -42,7 +45,8 @@ public class PostController {
     @Operation(summary = "게시글 단건 조회", description = "게시글 ID로 특정 게시글을 조회합니다.")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "조회 성공"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "게시글을 찾을 수 없음")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "게시글을 찾을 수 없음",
+                    content = @Content(examples = @ExampleObject(value = "{\"code\": \"404\", \"message\": \"존재하지 않는 게시글입니다.\", \"data\": null}")))
     })
     public ResponseEntity<ApiResponse<PostResponse>> getPost(
             @Parameter(description = "게시글 ID") @PathVariable Long id) {
@@ -54,7 +58,8 @@ public class PostController {
     @Operation(summary = "게시글 작성", description = "새로운 게시글을 작성합니다.")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "생성 성공"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "잘못된 요청")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "잘못된 요청",
+                    content = @Content(examples = @ExampleObject(value = "{\"code\": \"400\", \"message\": \"게시글 내용은 1자 이상 280자 이하여야 합니다.\", \"data\": null}")))
     })
     public ResponseEntity<ApiResponse<PostResponse>> createPost(@RequestBody PostRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(postService.createPost(request)));
@@ -65,7 +70,8 @@ public class PostController {
     @Operation(summary = "게시글 수정", description = "기존 게시글을 수정합니다.")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "수정 성공"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "게시글을 찾을 수 없음")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "게시글을 찾을 수 없음",
+                    content = @Content(examples = @ExampleObject(value = "{\"code\": \"404\", \"message\": \"존재하지 않는 게시글입니다.\", \"data\": null}")))
     })
     public ResponseEntity<ApiResponse<PostResponse>> updatePost(
             @Parameter(description = "게시글 ID") @PathVariable Long id,
@@ -78,7 +84,8 @@ public class PostController {
     @Operation(summary = "게시글 삭제", description = "게시글을 삭제합니다.")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "삭제 성공"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "게시글을 찾을 수 없음")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "게시글을 찾을 수 없음",
+                    content = @Content(examples = @ExampleObject(value = "{\"code\": \"404\", \"message\": \"존재하지 않는 게시글입니다.\", \"data\": null}")))
     })
     public ResponseEntity<ApiResponse<Void>> deletePost(
             @Parameter(description = "게시글 ID") @PathVariable Long id) {

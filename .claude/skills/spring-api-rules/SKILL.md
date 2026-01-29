@@ -17,6 +17,9 @@ com.example.project
 ├── global/                      # 전역 공통 모듈
 │   ├── config/
 │   │   └── SpringDoc.java       # Swagger/OpenAPI 설정
+│   ├── exception/
+│   │   ├── BusinessException.java      # 비즈니스 예외 기본 클래스
+│   │   └── GlobalExceptionHandler.java # 전역 예외 처리 핸들러
 │   ├── jpa/
 │   │   └── entity/
 │   │       └── BaseEntity.java  # 공통 엔티티 (createDate, modifyDate)
@@ -45,6 +48,9 @@ com.apiece.twitter
 ├── global/
 │   ├── config/
 │   │   └── SpringDoc.java
+│   ├── exception/
+│   │   ├── BusinessException.java
+│   │   └── GlobalExceptionHandler.java
 │   ├── jpa/entity/
 │   │   └── BaseEntity.java
 │   └── response/
@@ -120,17 +126,42 @@ public class Post extends BaseEntity {
 -   **⚠️ 모든 API 응답은 반드시 `ApiResponse<T>`로 래핑**
 
 ```java
+package com.example.project.global.response;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+
 @AllArgsConstructor
 @Getter
+@Schema(description = "공통 API 응답")
 public class ApiResponse<T> {
+
+    @Schema(description = "응답 코드", example = "200")
     private String code;
+
+    @Schema(description = "응답 메시지", example = "정상적으로 완료되었습니다.")
     private String message;
+
+    @Schema(description = "응답 데이터")
     private T data;
 
-    public static <T> ApiResponse<T> success(T data) { ... }
-    public static <T> ApiResponse<T> success() { ... }
-    public static <T> ApiResponse<T> error(ResponseCode code) { ... }
-    public static <T> ApiResponse<T> error(ErrorCode code) { ... }
+    public static <T> ApiResponse<T> success(T data) {
+        return new ApiResponse<>(ResponseCode.OK.getCode(), ResponseCode.OK.getMessage(), data);
+    }
+
+    public static <T> ApiResponse<T> success() {
+        return new ApiResponse<>(ResponseCode.OK.getCode(), ResponseCode.OK.getMessage(), null);
+    }
+
+    public static <T> ApiResponse<T> error(ResponseCode code) {
+        return new ApiResponse<>(code.getCode(), code.getMessage(), null);
+    }
+
+    public static <T> ApiResponse<T> error(ErrorCode code) {
+        // code는 HTTP 상태 코드, message는 ErrorCode의 메시지 사용
+        return new ApiResponse<>(String.valueOf(code.getStatus().value()), code.getMessage(), null);
+    }
 }
 ```
 
@@ -141,6 +172,11 @@ public class ApiResponse<T> {
 
 ```java
 // ResponseCode
+package com.example.project.global.response;
+
+import lombok.Getter;
+import org.springframework.http.HttpStatus;
+
 @Getter
 public enum ResponseCode {
     OK("200", HttpStatus.OK, "정상적으로 완료되었습니다."),
@@ -148,21 +184,138 @@ public enum ResponseCode {
     BAD_REQUEST("400", HttpStatus.BAD_REQUEST, "잘못된 요청입니다."),
     UNAUTHORIZED("401", HttpStatus.UNAUTHORIZED, "권한 정보가 없습니다."),
     INTERNAL_SERVER_ERROR("500", HttpStatus.INTERNAL_SERVER_ERROR, "서버 에러 입니다.");
-    // ...
-}
 
+    private final String code;
+    private final HttpStatus status;
+    private final String message;
+
+    ResponseCode(String code, HttpStatus status, String message) {
+        this.code = code;
+        this.status = status;
+        this.message = message;
+    }
+}
+```
+
+```java
 // ErrorCode - 도메인별 접두사: Post(P), User(U), Comment(C) 등
+package com.example.project.global.response;
+
+import lombok.Getter;
+import org.springframework.http.HttpStatus;
+
 @Getter
 public enum ErrorCode {
     // 게시글 (P)
     NOT_FOUND_POST("P001", HttpStatus.NOT_FOUND, "존재하지 않는 게시글입니다."),
     INVALID_POST_CONTENT("P002", HttpStatus.BAD_REQUEST, "게시글 내용은 1자 이상 280자 이하여야 합니다."),
     UNAUTHORIZED_POST_ACCESS("P003", HttpStatus.FORBIDDEN, "해당 게시글에 대한 권한이 없습니다.");
-    // ...
+
+    // 사용자 (U) - 예시
+    // NOT_FOUND_USER("U001", HttpStatus.NOT_FOUND, "존재하지 않는 사용자입니다."),
+
+    private final String code;
+    private final HttpStatus status;
+    private final String message;
+
+    ErrorCode(String code, HttpStatus status, String message) {
+        this.code = code;
+        this.status = status;
+        this.message = message;
+    }
 }
 ```
 
-### 4. SpringDoc (Swagger 설정)
+### 4. 예외 처리 (Exception Handling - 필수!)
+
+**⚠️ 모든 비즈니스 예외는 반드시 `BusinessException`을 사용하고, `GlobalExceptionHandler`에서 처리해야 합니다.**
+
+#### BusinessException
+-   **위치:** `global/exception/BusinessException.java`
+-   **⚠️ 절대 `IllegalArgumentException`, `RuntimeException` 등을 직접 던지지 마세요!**
+
+```java
+@Getter
+public class BusinessException extends RuntimeException {
+
+    private final ErrorCode errorCode;
+
+    public BusinessException(ErrorCode errorCode) {
+        super(errorCode.getMessage());
+        this.errorCode = errorCode;
+    }
+}
+```
+
+#### GlobalExceptionHandler
+-   **위치:** `global/exception/GlobalExceptionHandler.java`
+-   **⚠️ `@RestControllerAdvice`로 전역 예외 처리**
+
+```java
+@Slf4j
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    // BusinessException 처리 - 도메인별 ErrorCode 사용
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e) {
+        ErrorCode errorCode = e.getErrorCode();
+        log.warn("BusinessException: {} - {}", errorCode.getCode(), errorCode.getMessage());
+        return ResponseEntity
+                .status(errorCode.getStatus())
+                .body(ApiResponse.error(errorCode));
+    }
+
+    // 예상치 못한 예외 처리
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception e) {
+        log.error("Unexpected exception: ", e);
+        return ResponseEntity
+                .status(ResponseCode.INTERNAL_SERVER_ERROR.getStatus())
+                .body(ApiResponse.error(ResponseCode.INTERNAL_SERVER_ERROR));
+    }
+}
+```
+
+#### Service에서 예외 던지기 (올바른 예시)
+
+```java
+// ❌ 잘못된 예시 - 500 에러 발생!
+public PostResponse getPost(Long id) {
+    return postRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("Post not found"));
+}
+
+// ✅ 올바른 예시 - 도메인 ErrorCode 사용
+public PostResponse getPost(Long id) {
+    return postRepository.findById(id)
+            .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_POST));
+}
+```
+
+#### 예외 처리 응답 예시
+
+```json
+// 존재하지 않는 게시글 조회 시 (404)
+{
+    "code": "404",
+    "message": "존재하지 않는 게시글입니다.",
+    "data": null
+}
+
+// 게시글 내용 유효성 실패 시 (400)
+{
+    "code": "400",
+    "message": "게시글 내용은 1자 이상 280자 이하여야 합니다.",
+    "data": null
+}
+```
+
+**⚠️ code는 HTTP 상태 코드, message는 ErrorCode의 메시지 사용**
+- 내부적으로는 P001, P002 등으로 관리 (로깅, 디버깅용)
+- 응답에서는 404, 400 등 HTTP 상태 코드로 통일 (문서화 간소화)
+
+### 5. SpringDoc (Swagger 설정)
 -   **위치:** `global/config/SpringDoc.java`
 -   **⚠️ 버전:** `springdoc-openapi-starter-webmvc-ui:2.8.0` 사용
 -   도메인별 API 그룹화
@@ -208,6 +361,8 @@ Swagger UI에서 API를 테스트할 수 있도록 **모든 API에 문서화 어
 ```java
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
@@ -228,18 +383,35 @@ public class PostController {
         // ...
     }
 
+    // 게시글 단건 조회 API (에러 응답 예시 포함)
+    @GetMapping("/api/posts/{id}")
+    @Operation(summary = "게시글 단건 조회", description = "게시글 ID로 특정 게시글을 조회합니다.")
+    @ApiResponses(value = {
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "조회 성공"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "게시글을 찾을 수 없음",
+                    content = @Content(examples = @ExampleObject(value = "{\"code\": \"404\", \"message\": \"존재하지 않는 게시글입니다.\", \"data\": null}")))
+    })
+    public ResponseEntity<ApiResponse<PostResponse>> getPost(@PathVariable Long id) {
+        // ...
+    }
+
     // 게시글 작성 API
     @PostMapping("/api/posts")
     @Operation(summary = "게시글 작성", description = "새로운 게시글을 작성합니다.")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "생성 성공"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "잘못된 요청")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "잘못된 요청",
+                    content = @Content(examples = @ExampleObject(value = "{\"code\": \"400\", \"message\": \"게시글 내용은 1자 이상 280자 이하여야 합니다.\", \"data\": null}")))
     })
     public ResponseEntity<ApiResponse<PostResponse>> createPost(@RequestBody PostRequest request) {
         // ...
     }
 }
 ```
+
+**⚠️ 에러 응답 설정 핵심:**
+- `@ExampleObject`로 직접 JSON 예시를 지정하면 `data: null`이 정확히 표시됨
+- `@Schema(implementation = ...)`은 `data: "string"`으로 표시되므로 사용 지양
 
 ### DTO 문서화 예시 (@Schema)
 ```java
@@ -434,22 +606,132 @@ public PostResponse createPost(PostRequest request) {
 -   `@GeneratedValue(strategy = GenerationType.IDENTITY)`.
 -   모든 연관관계는 `FetchType.LAZY`.
 -   `@JoinColumn` 사용 (물리적 FK 제약은 상황에 따라 제외 가능).
+-   **⚠️ `@Setter` 금지** - 비즈니스 메서드로 상태 변경
+
+```java
+package com.example.project.post.domain;
+
+import com.example.project.global.jpa.entity.BaseEntity;
+import jakarta.persistence.*;
+import lombok.AccessLevel;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+@Entity
+@Table(name = "posts")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+public class Post extends BaseEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, length = 280)
+    private String content;
+
+    @Column(nullable = false, length = 50)
+    private String author;
+
+    @Builder
+    public Post(String content, String author) {
+        this.content = content;
+        this.author = author;
+    }
+
+    // 비즈니스 메서드 - Setter 대신 사용
+    public void updateContent(String content) {
+        this.content = content;
+    }
+}
+```
 
 ### 2. 리포지토리 (Repository)
 -   **위치:** `{domain}/repository/` 패키지
 -   `JpaRepository<Entity, ID>` 확장.
 
+```java
+package com.example.project.post.repository;
+
+import com.example.project.post.domain.Post;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface PostRepository extends JpaRepository<Post, Long> {
+    // 커스텀 쿼리 메서드 예시
+    // List<Post> findByAuthor(String author);
+    // Page<Post> findByContentContaining(String keyword, Pageable pageable);
+}
+```
+
 ### 3. 서비스 (Service)
 -   **위치:** `{domain}/service/` 패키지
--   **쓰기(Create, Update, Delete):** `@Transactional` 필수.
--   **읽기(Read):** 단순 조회는 트랜잭션 불필요. 복잡한 조회만 `@Transactional(readOnly = true)`.
--   도메인별 예외(`{Domain}Exception`)를 만들고 `@RestControllerAdvice`로 처리.
+-   **클래스 레벨:** `@Transactional(readOnly = true)` 적용
+-   **쓰기(Create, Update, Delete):** 메서드에 `@Transactional` 추가
+-   **⚠️ 예외는 반드시 `BusinessException` 사용**
 -   **✅ 주석 필수:** 주요 비즈니스 로직 메서드 위에 **기능 요약 주석**을 작성하세요.
-    ```java
-    // 게시글 작성 및 포인트 적립 처리
+
+```java
+package com.example.project.post.service;
+
+import com.example.project.global.exception.BusinessException;
+import com.example.project.global.response.ErrorCode;
+import com.example.project.post.domain.Post;
+import com.example.project.post.dto.PostRequest;
+import com.example.project.post.dto.PostResponse;
+import com.example.project.post.repository.PostRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class PostService {
+
+    private final PostRepository postRepository;
+
+    // 전체 게시글을 최신순으로 조회 (페이징)
+    public Page<PostResponse> getAllPosts(Pageable pageable) {
+        return postRepository.findAll(pageable)
+                .map(PostResponse::from);
+    }
+
+    // ID로 게시글 단건 조회
+    public PostResponse getPost(Long id) {
+        Post post = postRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_POST));
+        return PostResponse.from(post);
+    }
+
+    // 새 게시글 작성
     @Transactional
-    public PostResponse createPost(...) { ... }
-    ```
+    public PostResponse createPost(PostRequest request) {
+        Post post = request.toEntity();
+        Post savedPost = postRepository.save(post);
+        return PostResponse.from(savedPost);
+    }
+
+    // 게시글 내용 수정
+    @Transactional
+    public PostResponse updatePost(Long id, PostRequest request) {
+        Post post = postRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_POST));
+        post.updateContent(request.content());
+        return PostResponse.from(post);
+    }
+
+    // 게시글 삭제
+    @Transactional
+    public void deletePost(Long id) {
+        Post post = postRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_POST));
+        postRepository.delete(post);
+    }
+}
+```
 
 ## 🛡️ 협업 및 작업 범위 규칙 (중요!)
 
@@ -753,6 +1035,8 @@ class PostRepositoryTest {
 ```java
 package com.apiece.twitter.post.service;
 
+import com.apiece.twitter.global.exception.BusinessException;
+import com.apiece.twitter.global.response.ErrorCode;
 import com.apiece.twitter.post.domain.Post;
 import com.apiece.twitter.post.dto.PostRequest;
 import com.apiece.twitter.post.dto.PostResponse;
@@ -815,8 +1099,11 @@ class PostServiceTest {
 
         // when & then
         assertThatThrownBy(() -> postService.getPost(postId))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Post not found");
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND_POST);
+                });
     }
 
     @Test
@@ -971,4 +1258,58 @@ class PostControllerTest {
 ## 📜 curl 테스트 스크립트
 
 API 개발 시 `src/main/resources/http/` 경로에 curl 스크립트 생성을 권장합니다.
--   파일명: `{resource}.sh` (예: `posts.sh`)
+
+### 예시: posts.http (IntelliJ HTTP Client)
+```http
+### 게시글 전체 조회
+GET http://localhost:8080/api/posts?page=0&size=10
+
+### 게시글 단건 조회
+GET http://localhost:8080/api/posts/1
+
+### 게시글 작성
+POST http://localhost:8080/api/posts
+Content-Type: application/json
+
+{
+  "content": "새 게시글 내용입니다.",
+  "author": "홍길동"
+}
+
+### 게시글 수정
+PUT http://localhost:8080/api/posts/1
+Content-Type: application/json
+
+{
+  "content": "수정된 내용입니다.",
+  "author": "홍길동"
+}
+
+### 게시글 삭제
+DELETE http://localhost:8080/api/posts/1
+```
+
+### 예시: posts.sh (curl 스크립트)
+```bash
+#!/bin/bash
+BASE_URL="http://localhost:8080/api"
+
+# 게시글 전체 조회
+curl -X GET "$BASE_URL/posts?page=0&size=10"
+
+# 게시글 단건 조회
+curl -X GET "$BASE_URL/posts/1"
+
+# 게시글 작성
+curl -X POST "$BASE_URL/posts" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "새 게시글", "author": "홍길동"}'
+
+# 게시글 수정
+curl -X PUT "$BASE_URL/posts/1" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "수정된 내용", "author": "홍길동"}'
+
+# 게시글 삭제
+curl -X DELETE "$BASE_URL/posts/1"
+```
