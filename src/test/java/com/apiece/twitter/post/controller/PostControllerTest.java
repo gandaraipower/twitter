@@ -14,6 +14,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
@@ -83,6 +84,7 @@ class PostControllerTest {
 
     @Test
     @DisplayName("POST /api/posts - 게시글 작성")
+    @WithMockUser
     void createPost() throws Exception {
         // given
         PostRequest request = new PostRequest("새 게시글", "홍길동");
@@ -101,6 +103,7 @@ class PostControllerTest {
 
     @Test
     @DisplayName("PUT /api/posts/{id} - 게시글 수정")
+    @WithMockUser
     void updatePost() throws Exception {
         // given
         Long postId = 1L;
@@ -120,6 +123,7 @@ class PostControllerTest {
 
     @Test
     @DisplayName("DELETE /api/posts/{id} - 게시글 삭제")
+    @WithMockUser
     void deletePost() throws Exception {
         // given
         Long postId = 1L;

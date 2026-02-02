@@ -14,3 +14,7 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
+
+jwt:
+  secret: twitter-clone-secret-key-must-be-at-least-32-characters-long
+  access-token-expiration: 3600000

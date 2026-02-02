@@ -9,6 +9,18 @@ import org.springframework.http.HttpStatus;
 @Getter
 public enum ErrorCode {
 
+    // 인증 (A)
+    INVALID_TOKEN("A001", HttpStatus.UNAUTHORIZED, "유효하지 않은 토큰입니다."),
+    EXPIRED_TOKEN("A002", HttpStatus.UNAUTHORIZED, "만료된 토큰입니다."),
+    UNSUPPORTED_TOKEN("A003", HttpStatus.UNAUTHORIZED, "지원하지 않는 토큰 형식입니다."),
+    EMPTY_TOKEN("A004", HttpStatus.UNAUTHORIZED, "토큰이 비어있습니다."),
+    UNAUTHORIZED("A005", HttpStatus.UNAUTHORIZED, "인증이 필요합니다."),
+
+    // 사용자 (U)
+    DUPLICATE_EMAIL("U001", HttpStatus.CONFLICT, "이미 사용 중인 이메일입니다."),
+    USER_NOT_FOUND("U002", HttpStatus.NOT_FOUND, "존재하지 않는 사용자입니다."),
+    INVALID_PASSWORD("U003", HttpStatus.UNAUTHORIZED, "비밀번호가 일치하지 않습니다."),
+
     // 게시글 (P)
     NOT_FOUND_POST("P001", HttpStatus.NOT_FOUND, "존재하지 않는 게시글입니다."),
     INVALID_POST_CONTENT("P002", HttpStatus.BAD_REQUEST, "게시글 내용은 1자 이상 280자 이하여야 합니다."),

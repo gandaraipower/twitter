@@ -23,10 +23,24 @@ com.example.project
 │   ├── jpa/
 │   │   └── entity/
 │   │       └── BaseEntity.java  # 공통 엔티티 (createDate, modifyDate)
-│   └── response/
-│       ├── ApiResponse.java     # 공통 응답 래퍼
-│       ├── ErrorCode.java       # 도메인별 에러 코드
-│       └── ResponseCode.java    # 공통 응답 코드
+│   ├── response/
+│   │   ├── ApiResponse.java     # 공통 응답 래퍼
+│   │   ├── ErrorCode.java       # 도메인별 에러 코드
+│   │   └── ResponseCode.java    # 공통 응답 코드
+│   └── security/                # 인증/인가 모듈
+│       ├── config/
+│       │   └── SecurityConfig.java
+│       ├── jwt/
+│       │   ├── JwtTokenProvider.java
+│       │   ├── JwtAuthenticationFilter.java
+│       │   └── JwtProperties.java
+│       ├── oauth2/              # 소셜 로그인 (선택)
+│       │   ├── CustomOAuth2UserService.java
+│       │   ├── OAuth2SuccessHandler.java
+│       │   └── userinfo/
+│       └── handler/
+│           ├── CustomAuthenticationEntryPoint.java
+│           └── CustomAccessDeniedHandler.java
 ├── {domain}/                    # 도메인별 패키지 (예: post, user, order)
 │   ├── controller/
 │   │   └── {Domain}Controller.java
@@ -731,6 +745,963 @@ public class PostService {
         postRepository.delete(post);
     }
 }
+```
+
+## 🔐 인증/인가 (Authentication & Authorization)
+
+### 개요
+-   **인증 방식:** JWT (Access Token + Refresh Token)
+-   **권한 수준:** 단순 인증 (로그인 여부만 체크)
+-   **라이브러리:** Spring Security + jjwt
+
+### 패키지 구조 (global/security/)
+
+```
+global/security/
+├── config/
+│   └── SecurityConfig.java         # Spring Security 설정
+├── jwt/
+│   ├── JwtTokenProvider.java       # JWT 생성/검증
+│   ├── JwtAuthenticationFilter.java # JWT 인증 필터
+│   └── JwtProperties.java          # JWT 설정값 (application.yaml)
+├── handler/
+│   ├── CustomAuthenticationEntryPoint.java  # 401 처리
+│   └── CustomAccessDeniedHandler.java       # 403 처리
+└── dto/
+    ├── TokenRequest.java           # 로그인 요청
+    └── TokenResponse.java          # 토큰 응답
+```
+
+### 의존성 (build.gradle.kts)
+
+```kotlin
+dependencies {
+    // Spring Security
+    implementation("org.springframework.boot:spring-boot-starter-security")
+
+    // JWT
+    implementation("io.jsonwebtoken:jjwt-api:0.12.6")
+    runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
+    runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
+
+    // Test - Security
+    testImplementation("org.springframework.security:spring-security-test")
+}
+```
+
+### application.yaml 설정
+
+```yaml
+jwt:
+  secret: ${JWT_SECRET:your-256-bit-secret-key-here-must-be-at-least-32-characters}
+  access-token-validity: 3600000      # 1시간 (ms)
+  refresh-token-validity: 604800000   # 7일 (ms)
+```
+
+### 1. JwtProperties (설정값 바인딩)
+
+```java
+package com.example.project.global.security.jwt;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties(prefix = "jwt")
+public record JwtProperties(
+        String secret,
+        long accessTokenValidity,
+        long refreshTokenValidity
+) {}
+```
+
+**⚠️ Application 클래스에 `@EnableConfigurationProperties(JwtProperties.class)` 추가 필수!**
+
+### 2. JwtTokenProvider (토큰 생성/검증)
+
+```java
+package com.example.project.global.security.jwt;
+
+import io.jsonwebtoken.*;
+import io.jsonwebtoken.security.Keys;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.util.Date;
+
+@Component
+@RequiredArgsConstructor
+public class JwtTokenProvider {
+
+    private final JwtProperties jwtProperties;
+
+    // Access Token 생성
+    public String createAccessToken(Long userId) {
+        return createToken(userId, jwtProperties.accessTokenValidity());
+    }
+
+    // Refresh Token 생성
+    public String createRefreshToken(Long userId) {
+        return createToken(userId, jwtProperties.refreshTokenValidity());
+    }
+
+    private String createToken(Long userId, long validity) {
+        Date now = new Date();
+        Date expiry = new Date(now.getTime() + validity);
+
+        return Jwts.builder()
+                .subject(String.valueOf(userId))
+                .issuedAt(now)
+                .expiration(expiry)
+                .signWith(getSigningKey())
+                .compact();
+    }
+
+    // 토큰에서 userId 추출
+    public Long getUserId(String token) {
+        return Long.parseLong(
+                Jwts.parser()
+                        .verifyWith(getSigningKey())
+                        .build()
+                        .parseSignedClaims(token)
+                        .getPayload()
+                        .getSubject()
+        );
+    }
+
+    // 토큰 유효성 검증
+    public boolean validateToken(String token) {
+        try {
+            Jwts.parser()
+                    .verifyWith(getSigningKey())
+                    .build()
+                    .parseSignedClaims(token);
+            return true;
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    private SecretKey getSigningKey() {
+        byte[] keyBytes = jwtProperties.secret().getBytes(StandardCharsets.UTF_8);
+        return Keys.hmacShaKeyFor(keyBytes);
+    }
+}
+```
+
+### 3. JwtAuthenticationFilter (인증 필터)
+
+```java
+package com.example.project.global.security.jwt;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.util.Collections;
+
+@Component
+@RequiredArgsConstructor
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private static final String AUTHORIZATION_HEADER = "Authorization";
+    private static final String BEARER_PREFIX = "Bearer ";
+
+    private final JwtTokenProvider jwtTokenProvider;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+
+        String token = resolveToken(request);
+
+        if (StringUtils.hasText(token) && jwtTokenProvider.validateToken(token)) {
+            Long userId = jwtTokenProvider.getUserId(token);
+            Authentication auth = new UsernamePasswordAuthenticationToken(
+                    userId, null, Collections.emptyList()
+            );
+            SecurityContextHolder.getContext().setAuthentication(auth);
+        }
+
+        filterChain.doFilter(request, response);
+    }
+
+    private String resolveToken(HttpServletRequest request) {
+        String bearerToken = request.getHeader(AUTHORIZATION_HEADER);
+        if (StringUtils.hasText(bearerToken) && bearerToken.startsWith(BEARER_PREFIX)) {
+            return bearerToken.substring(BEARER_PREFIX.length());
+        }
+        return null;
+    }
+}
+```
+
+### 4. 예외 핸들러 (401, 403)
+
+```java
+// CustomAuthenticationEntryPoint.java - 인증 실패 (401)
+package com.example.project.global.security.handler;
+
+import com.example.project.global.response.ApiResponse;
+import com.example.project.global.response.ErrorCode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+
+@Component
+@RequiredArgsConstructor
+public class CustomAuthenticationEntryPoint implements AuthenticationEntryPoint {
+
+    private final ObjectMapper objectMapper;
+
+    @Override
+    public void commence(HttpServletRequest request,
+                         HttpServletResponse response,
+                         AuthenticationException authException) throws IOException {
+
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding("UTF-8");
+
+        ApiResponse<Void> errorResponse = ApiResponse.error(ErrorCode.UNAUTHORIZED);
+        response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
+    }
+}
+```
+
+```java
+// CustomAccessDeniedHandler.java - 권한 부족 (403)
+package com.example.project.global.security.handler;
+
+import com.example.project.global.response.ApiResponse;
+import com.example.project.global.response.ErrorCode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+
+@Component
+@RequiredArgsConstructor
+public class CustomAccessDeniedHandler implements AccessDeniedHandler {
+
+    private final ObjectMapper objectMapper;
+
+    @Override
+    public void handle(HttpServletRequest request,
+                       HttpServletResponse response,
+                       AccessDeniedException accessDeniedException) throws IOException {
+
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding("UTF-8");
+
+        ApiResponse<Void> errorResponse = ApiResponse.error(ErrorCode.FORBIDDEN);
+        response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
+    }
+}
+```
+
+### 5. SecurityConfig (보안 설정)
+
+```java
+package com.example.project.global.security.config;
+
+import com.example.project.global.security.handler.CustomAccessDeniedHandler;
+import com.example.project.global.security.handler.CustomAuthenticationEntryPoint;
+import com.example.project.global.security.jwt.JwtAuthenticationFilter;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableWebSecurity
+@RequiredArgsConstructor
+public class SecurityConfig {
+
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final CustomAuthenticationEntryPoint authenticationEntryPoint;
+    private final CustomAccessDeniedHandler accessDeniedHandler;
+
+    // 인증 없이 접근 가능한 경로
+    private static final String[] PUBLIC_URLS = {
+            // Swagger
+            "/swagger-ui/**",
+            "/swagger-ui.html",
+            "/v3/api-docs/**",
+            // 인증 API
+            "/api/auth/**",
+            // 공개 API (필요시 추가)
+            "/api/posts/**"  // 예시: 게시글 조회는 공개
+    };
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        return http
+                // CSRF 비활성화 (JWT 사용)
+                .csrf(AbstractHttpConfigurer::disable)
+                // 세션 사용 안함 (Stateless)
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                // 요청 권한 설정
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(PUBLIC_URLS).permitAll()
+                        .anyRequest().authenticated()
+                )
+                // 예외 처리
+                .exceptionHandling(exception -> exception
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler)
+                )
+                // JWT 필터 추가
+                .addFilterBefore(jwtAuthenticationFilter,
+                        UsernamePasswordAuthenticationFilter.class)
+                .build();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+```
+
+### 6. ErrorCode 확장 (인증 관련)
+
+```java
+// ErrorCode.java에 추가
+public enum ErrorCode {
+    // ... 기존 코드 ...
+
+    // 인증 (AUTH)
+    UNAUTHORIZED("AUTH001", HttpStatus.UNAUTHORIZED, "인증이 필요합니다."),
+    INVALID_TOKEN("AUTH002", HttpStatus.UNAUTHORIZED, "유효하지 않은 토큰입니다."),
+    EXPIRED_TOKEN("AUTH003", HttpStatus.UNAUTHORIZED, "만료된 토큰입니다."),
+    FORBIDDEN("AUTH004", HttpStatus.FORBIDDEN, "접근 권한이 없습니다."),
+
+    // 사용자 (U)
+    NOT_FOUND_USER("U001", HttpStatus.NOT_FOUND, "존재하지 않는 사용자입니다."),
+    DUPLICATE_EMAIL("U002", HttpStatus.CONFLICT, "이미 사용 중인 이메일입니다."),
+    INVALID_PASSWORD("U003", HttpStatus.BAD_REQUEST, "비밀번호가 일치하지 않습니다.");
+
+    // ...
+}
+```
+
+### 7. Swagger JWT 인증 설정
+
+```java
+// SpringDoc.java 수정
+package com.example.project.global.config;
+
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
+import io.swagger.v3.oas.annotations.info.Info;
+import io.swagger.v3.oas.annotations.security.SecurityScheme;
+import io.swagger.v3.oas.models.security.SecurityRequirement;
+import org.springdoc.core.models.GroupedOpenApi;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+@OpenAPIDefinition(info = @Info(title = "Twitter Clone API 서버", version = "v1"))
+@SecurityScheme(
+        name = "bearerAuth",
+        type = SecuritySchemeType.HTTP,
+        scheme = "bearer",
+        bearerFormat = "JWT"
+)
+public class SpringDoc {
+
+    @Bean
+    public GroupedOpenApi allApi() {
+        return GroupedOpenApi.builder()
+                .group("all")
+                .pathsToMatch("/api/**")
+                .addOpenApiCustomizer(openApi ->
+                        openApi.addSecurityItem(new SecurityRequirement().addList("bearerAuth")))
+                .build();
+    }
+
+    // ... 기존 코드 ...
+}
+```
+
+### 8. 컨트롤러에서 인증된 사용자 정보 사용
+
+```java
+// Controller에서 현재 로그인한 사용자 ID 가져오기
+@GetMapping("/api/me")
+public ResponseEntity<ApiResponse<UserResponse>> getMe(
+        @AuthenticationPrincipal Long userId) {  // SecurityContext에서 자동 주입
+    return ResponseEntity.status(HttpStatus.OK)
+            .body(ApiResponse.success(userService.getUser(userId)));
+}
+
+// 또는 직접 SecurityContext에서 가져오기
+public Long getCurrentUserId() {
+    Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+    return (Long) auth.getPrincipal();
+}
+```
+
+### 9. 인증 필요 여부 표시 (Swagger)
+
+```java
+// 인증이 필요한 API
+@Operation(summary = "내 정보 조회", security = @SecurityRequirement(name = "bearerAuth"))
+@GetMapping("/api/me")
+public ResponseEntity<ApiResponse<UserResponse>> getMe(...) { }
+
+// 인증이 필요 없는 API (security 생략 또는 빈 배열)
+@Operation(summary = "게시글 목록 조회")
+@GetMapping("/api/posts")
+public ResponseEntity<ApiResponse<Page<PostResponse>>> getAllPosts(...) { }
+```
+
+### 인증 관련 규칙 요약
+
+| 항목 | 규칙 |
+|------|------|
+| 토큰 위치 | `Authorization: Bearer {token}` 헤더 |
+| 토큰 타입 | Access Token (1시간), Refresh Token (7일) |
+| 비밀번호 | BCryptPasswordEncoder 필수 |
+| 공개 API | SecurityConfig의 `PUBLIC_URLS`에 등록 |
+| 인증 실패 | 401 + ErrorCode.UNAUTHORIZED |
+| 권한 부족 | 403 + ErrorCode.FORBIDDEN |
+
+---
+
+## 🌐 OAuth2 소셜 로그인 (Google, Kakao, Naver)
+
+### 개요
+-   JWT 인증과 함께 소셜 로그인 지원
+-   소셜 로그인 성공 시 자체 JWT 토큰 발급
+-   기존 회원과 소셜 계정 연동 가능
+
+### 패키지 구조 (확장)
+
+```
+global/security/
+├── config/
+│   └── SecurityConfig.java
+├── jwt/
+│   └── ... (기존 JWT 관련)
+├── oauth2/
+│   ├── CustomOAuth2UserService.java       # 소셜 로그인 처리
+│   ├── OAuth2SuccessHandler.java          # 로그인 성공 핸들러
+│   ├── OAuth2FailureHandler.java          # 로그인 실패 핸들러
+│   └── userinfo/
+│       ├── OAuth2UserInfo.java            # 공통 인터페이스
+│       ├── GoogleUserInfo.java
+│       ├── KakaoUserInfo.java
+│       └── NaverUserInfo.java
+└── ...
+```
+
+### 의존성 추가 (build.gradle.kts)
+
+```kotlin
+dependencies {
+    // OAuth2 Client
+    implementation("org.springframework.boot:spring-boot-starter-oauth2-client")
+}
+```
+
+### application.yaml 설정
+
+```yaml
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+            scope:
+              - email
+              - profile
+          kakao:
+            client-id: ${KAKAO_CLIENT_ID}
+            client-secret: ${KAKAO_CLIENT_SECRET}
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            authorization-grant-type: authorization_code
+            client-authentication-method: client_secret_post
+            scope:
+              - profile_nickname
+              - account_email
+          naver:
+            client-id: ${NAVER_CLIENT_ID}
+            client-secret: ${NAVER_CLIENT_SECRET}
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            authorization-grant-type: authorization_code
+            scope:
+              - name
+              - email
+        provider:
+          kakao:
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
+          naver:
+            authorization-uri: https://nid.naver.com/oauth2.0/authorize
+            token-uri: https://nid.naver.com/oauth2.0/token
+            user-info-uri: https://openapi.naver.com/v1/nid/me
+            user-name-attribute: response
+```
+
+### 1. OAuth2UserInfo (공통 인터페이스)
+
+```java
+package com.example.project.global.security.oauth2.userinfo;
+
+public interface OAuth2UserInfo {
+    String getProviderId();    // 소셜 제공자의 고유 ID
+    String getProvider();      // google, kakao, naver
+    String getEmail();
+    String getName();
+}
+```
+
+### 2. Provider별 구현체
+
+```java
+// GoogleUserInfo.java
+public class GoogleUserInfo implements OAuth2UserInfo {
+    private final Map<String, Object> attributes;
+
+    public GoogleUserInfo(Map<String, Object> attributes) {
+        this.attributes = attributes;
+    }
+
+    @Override
+    public String getProviderId() {
+        return (String) attributes.get("sub");
+    }
+
+    @Override
+    public String getProvider() {
+        return "google";
+    }
+
+    @Override
+    public String getEmail() {
+        return (String) attributes.get("email");
+    }
+
+    @Override
+    public String getName() {
+        return (String) attributes.get("name");
+    }
+}
+```
+
+```java
+// KakaoUserInfo.java
+public class KakaoUserInfo implements OAuth2UserInfo {
+    private final Map<String, Object> attributes;
+
+    public KakaoUserInfo(Map<String, Object> attributes) {
+        this.attributes = attributes;
+    }
+
+    @Override
+    public String getProviderId() {
+        return String.valueOf(attributes.get("id"));
+    }
+
+    @Override
+    public String getProvider() {
+        return "kakao";
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public String getEmail() {
+        Map<String, Object> kakaoAccount = (Map<String, Object>) attributes.get("kakao_account");
+        return kakaoAccount != null ? (String) kakaoAccount.get("email") : null;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public String getName() {
+        Map<String, Object> properties = (Map<String, Object>) attributes.get("properties");
+        return properties != null ? (String) properties.get("nickname") : null;
+    }
+}
+```
+
+```java
+// NaverUserInfo.java
+public class NaverUserInfo implements OAuth2UserInfo {
+    private final Map<String, Object> attributes;
+
+    @SuppressWarnings("unchecked")
+    public NaverUserInfo(Map<String, Object> attributes) {
+        this.attributes = (Map<String, Object>) attributes.get("response");
+    }
+
+    @Override
+    public String getProviderId() {
+        return (String) attributes.get("id");
+    }
+
+    @Override
+    public String getProvider() {
+        return "naver";
+    }
+
+    @Override
+    public String getEmail() {
+        return (String) attributes.get("email");
+    }
+
+    @Override
+    public String getName() {
+        return (String) attributes.get("name");
+    }
+}
+```
+
+### 3. CustomOAuth2UserService
+
+```java
+package com.example.project.global.security.oauth2;
+
+import com.example.project.global.security.oauth2.userinfo.*;
+import com.example.project.user.domain.User;
+import com.example.project.user.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
+import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
+import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
+@Service
+@RequiredArgsConstructor
+public class CustomOAuth2UserService extends DefaultOAuth2UserService {
+
+    private final UserRepository userRepository;
+
+    @Override
+    @Transactional
+    public OAuth2User loadUser(OAuth2UserRequest userRequest) throws OAuth2AuthenticationException {
+        OAuth2User oAuth2User = super.loadUser(userRequest);
+
+        String registrationId = userRequest.getClientRegistration().getRegistrationId();
+        OAuth2UserInfo userInfo = getOAuth2UserInfo(registrationId, oAuth2User.getAttributes());
+
+        // 사용자 조회 또는 생성
+        User user = userRepository.findByProviderAndProviderId(
+                userInfo.getProvider(),
+                userInfo.getProviderId()
+        ).orElseGet(() -> createUser(userInfo));
+
+        // userId를 attributes에 추가
+        Map<String, Object> attributes = new HashMap<>(oAuth2User.getAttributes());
+        attributes.put("userId", user.getId());
+
+        return new DefaultOAuth2User(
+                Collections.emptyList(),
+                attributes,
+                userRequest.getClientRegistration()
+                        .getProviderDetails()
+                        .getUserInfoEndpoint()
+                        .getUserNameAttributeName()
+        );
+    }
+
+    private OAuth2UserInfo getOAuth2UserInfo(String registrationId, Map<String, Object> attributes) {
+        return switch (registrationId) {
+            case "google" -> new GoogleUserInfo(attributes);
+            case "kakao" -> new KakaoUserInfo(attributes);
+            case "naver" -> new NaverUserInfo(attributes);
+            default -> throw new OAuth2AuthenticationException("Unsupported provider: " + registrationId);
+        };
+    }
+
+    private User createUser(OAuth2UserInfo userInfo) {
+        User user = User.builder()
+                .email(userInfo.getEmail())
+                .name(userInfo.getName())
+                .provider(userInfo.getProvider())
+                .providerId(userInfo.getProviderId())
+                .build();
+        return userRepository.save(user);
+    }
+}
+```
+
+### 4. OAuth2SuccessHandler (로그인 성공 → JWT 발급)
+
+```java
+package com.example.project.global.security.oauth2;
+
+import com.example.project.global.security.jwt.JwtTokenProvider;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.security.web.authentication.SimpleUrlAuthenticationSuccessHandler;
+import org.springframework.stereotype.Component;
+import org.springframework.web.util.UriComponentsBuilder;
+
+import java.io.IOException;
+
+@Component
+@RequiredArgsConstructor
+public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler {
+
+    private final JwtTokenProvider jwtTokenProvider;
+    private static final String REDIRECT_URI = "http://localhost:3000/oauth/callback";
+
+    @Override
+    public void onAuthenticationSuccess(HttpServletRequest request,
+                                        HttpServletResponse response,
+                                        Authentication authentication) throws IOException {
+
+        OAuth2User oAuth2User = (OAuth2User) authentication.getPrincipal();
+        Long userId = (Long) oAuth2User.getAttributes().get("userId");
+
+        // JWT 토큰 생성
+        String accessToken = jwtTokenProvider.createAccessToken(userId);
+        String refreshToken = jwtTokenProvider.createRefreshToken(userId);
+
+        // 프론트엔드로 토큰 전달 (리다이렉트)
+        String redirectUrl = UriComponentsBuilder.fromUriString(REDIRECT_URI)
+                .queryParam("accessToken", accessToken)
+                .queryParam("refreshToken", refreshToken)
+                .build()
+                .toUriString();
+
+        getRedirectStrategy().sendRedirect(request, response, redirectUrl);
+    }
+}
+```
+
+### 5. OAuth2FailureHandler
+
+```java
+package com.example.project.global.security.oauth2;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.web.authentication.SimpleUrlAuthenticationFailureHandler;
+import org.springframework.stereotype.Component;
+import org.springframework.web.util.UriComponentsBuilder;
+
+import java.io.IOException;
+
+@Component
+public class OAuth2FailureHandler extends SimpleUrlAuthenticationFailureHandler {
+
+    private static final String REDIRECT_URI = "http://localhost:3000/oauth/callback";
+
+    @Override
+    public void onAuthenticationFailure(HttpServletRequest request,
+                                        HttpServletResponse response,
+                                        AuthenticationException exception) throws IOException {
+
+        String redirectUrl = UriComponentsBuilder.fromUriString(REDIRECT_URI)
+                .queryParam("error", exception.getMessage())
+                .build()
+                .toUriString();
+
+        getRedirectStrategy().sendRedirect(request, response, redirectUrl);
+    }
+}
+```
+
+### 6. SecurityConfig 수정 (OAuth2 추가)
+
+```java
+@Configuration
+@EnableWebSecurity
+@RequiredArgsConstructor
+public class SecurityConfig {
+
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final CustomAuthenticationEntryPoint authenticationEntryPoint;
+    private final CustomAccessDeniedHandler accessDeniedHandler;
+    private final CustomOAuth2UserService customOAuth2UserService;
+    private final OAuth2SuccessHandler oAuth2SuccessHandler;
+    private final OAuth2FailureHandler oAuth2FailureHandler;
+
+    private static final String[] PUBLIC_URLS = {
+            "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**",
+            "/api/auth/**",
+            "/oauth2/**", "/login/oauth2/**"  // OAuth2 관련 경로 추가
+    };
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        return http
+                .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(PUBLIC_URLS).permitAll()
+                        .anyRequest().authenticated()
+                )
+                .exceptionHandling(exception -> exception
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler)
+                )
+                // OAuth2 로그인 설정
+                .oauth2Login(oauth2 -> oauth2
+                        .userInfoEndpoint(userInfo ->
+                                userInfo.userService(customOAuth2UserService))
+                        .successHandler(oAuth2SuccessHandler)
+                        .failureHandler(oAuth2FailureHandler)
+                )
+                .addFilterBefore(jwtAuthenticationFilter,
+                        UsernamePasswordAuthenticationFilter.class)
+                .build();
+    }
+}
+```
+
+### 7. User 엔티티 (소셜 로그인 지원)
+
+```java
+@Entity
+@Table(name = "users")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+public class User extends BaseEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(length = 100)
+    private String email;
+
+    @Column(length = 50)
+    private String name;
+
+    @Column(length = 255)
+    private String password;  // 일반 로그인용 (소셜은 null)
+
+    @Column(length = 20)
+    private String provider;  // google, kakao, naver (일반 로그인은 null)
+
+    @Column(length = 100)
+    private String providerId;  // 소셜 제공자의 고유 ID
+
+    @Builder
+    public User(String email, String name, String password, String provider, String providerId) {
+        this.email = email;
+        this.name = name;
+        this.password = password;
+        this.provider = provider;
+        this.providerId = providerId;
+    }
+}
+```
+
+### 8. UserRepository (소셜 로그인 조회)
+
+```java
+public interface UserRepository extends JpaRepository<User, Long> {
+
+    Optional<User> findByEmail(String email);
+
+    Optional<User> findByProviderAndProviderId(String provider, String providerId);
+}
+```
+
+### 소셜 로그인 흐름 요약
+
+```
+1. 프론트엔드: /oauth2/authorization/{provider} 로 리다이렉트
+   예: /oauth2/authorization/google
+
+2. Spring Security가 자동으로 소셜 로그인 페이지로 이동
+
+3. 사용자가 소셜 로그인 완료
+
+4. 콜백: /login/oauth2/code/{provider}
+   → CustomOAuth2UserService.loadUser() 호출
+   → 사용자 조회/생성
+
+5. OAuth2SuccessHandler 실행
+   → JWT 토큰 생성
+   → 프론트엔드로 리다이렉트 (토큰 포함)
+   예: http://localhost:3000/oauth/callback?accessToken=xxx&refreshToken=xxx
+
+6. 프론트엔드: 토큰 저장 후 API 요청 시 사용
+```
+
+### 소셜 로그인 관련 ErrorCode 추가
+
+```java
+// ErrorCode.java에 추가
+OAUTH2_AUTHENTICATION_FAILED("AUTH010", HttpStatus.UNAUTHORIZED, "소셜 로그인에 실패했습니다."),
+UNSUPPORTED_OAUTH2_PROVIDER("AUTH011", HttpStatus.BAD_REQUEST, "지원하지 않는 소셜 로그인입니다.");
+```
+
+### 프론트엔드 연동 예시
+
+```javascript
+// 소셜 로그인 버튼 클릭
+const handleSocialLogin = (provider) => {
+  window.location.href = `http://localhost:8080/oauth2/authorization/${provider}`;
+};
+
+// 콜백 페이지에서 토큰 처리
+useEffect(() => {
+  const params = new URLSearchParams(window.location.search);
+  const accessToken = params.get('accessToken');
+  const refreshToken = params.get('refreshToken');
+
+  if (accessToken) {
+    localStorage.setItem('accessToken', accessToken);
+    localStorage.setItem('refreshToken', refreshToken);
+    navigate('/');
+  }
+}, []);
 ```
 
 ## 🛡️ 협업 및 작업 범위 규칙 (중요!)
