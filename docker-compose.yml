@@ -47,7 +47,7 @@ services:
   frontend:
     container_name: twitter-frontend
     build:
-      context: ./frontend
+      context: ./frontendt pu
       args:
         - NEXT_PUBLIC_API_URL=http://localhost:8080
         - NEXT_PUBLIC_AI_URL=http://localhost:8000

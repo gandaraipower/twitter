@@ -11,7 +11,9 @@
       "Bash(curl:*)",
       "Bash(docker-compose down:*)",
       "Bash(docker logs:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nrefactor: 모노레포 구조로 프로젝트 재구성\n\n- backend/, ai/, frontend/ 폴더로 분리\n- Spring Boot 코드를 backend/로 이동\n- FastAPI 기반 AI 서비스 추가 \\(감정분석, 해시태그 추천\\)\n- Next.js 프론트엔드 추가 \\(로그인, 회원가입, 게시글 CRUD\\)\n- 통합 docker-compose.yml 구성 \\(mysql, backend, ai, frontend\\)\n- Backend CORS 설정 추가\n- .claude/PROJECT.md 프로젝트 가이드 문서 추가\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(./gradlew build:*)"
     ]
   },
   "hooks": {
