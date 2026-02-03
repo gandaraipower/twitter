@@ -1,7 +1,7 @@
 services:
-  mysql-twitter:
-    container_name: mysql-twitter
-    image: mysql:9.3
+  mysql:
+    container_name: twitter-mysql
+    image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: root123
       MYSQL_DATABASE: twitterdb
@@ -9,23 +9,59 @@ services:
       MYSQL_PASSWORD: dev123
     ports:
       - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
     networks:
       - twitter-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  springboot-twitter:
-    container_name: springboot-twitter
-    image: twitter:latest
+  backend:
+    container_name: twitter-backend
+    build: ./backend
     ports:
       - "8080:8080"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql-twitter:3306/twitterdb
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/twitterdb
       SPRING_DATASOURCE_USERNAME: dev
       SPRING_DATASOURCE_PASSWORD: dev123
     depends_on:
-      - mysql-twitter
+      mysql:
+        condition: service_healthy
+    networks:
+      - twitter-network
+
+  ai:
+    container_name: twitter-ai
+    build: ./ai
+    ports:
+      - "8000:8000"
+    environment:
+      BACKEND_URL: http://backend:8080
+    networks:
+      - twitter-network
+
+  frontend:
+    container_name: twitter-frontend
+    build:
+      context: ./frontend
+      args:
+        - NEXT_PUBLIC_API_URL=http://localhost:8080
+        - NEXT_PUBLIC_AI_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+      - ai
     networks:
       - twitter-network
 
 networks:
   twitter-network:
     driver: bridge
+
+volumes:
+  mysql-data:

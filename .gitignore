@@ -1,9 +1,9 @@
-HELP.md
-.gradle
-build/
-!gradle/wrapper/gradle-wrapper.jar
-!**/src/main/**/build/
-!**/src/test/**/build/
+# ==== Backend (Spring Boot) ====
+backend/.gradle
+backend/build/
+!backend/gradle/wrapper/gradle-wrapper.jar
+!backend/**/src/main/**/build/
+!backend/**/src/test/**/build/
 
 ### STS ###
 .apt_generated
@@ -14,8 +14,6 @@ build/
 .springBeans
 .sts4-cache
 bin/
-!**/src/main/**/bin/
-!**/src/test/**/bin/
 
 ### IntelliJ IDEA ###
 .idea
@@ -23,8 +21,6 @@ bin/
 *.iml
 *.ipr
 out/
-!**/src/main/**/out/
-!**/src/test/**/out/
 
 ### NetBeans ###
 /nbproject/private/
@@ -33,5 +29,29 @@ out/
 /nbdist/
 /.nb-gradle/
 
+# ==== AI (Python) ====
+ai/__pycache__/
+ai/*.pyc
+ai/.venv/
+ai/venv/
+*.py[cod]
+__pycache__/
+
+# ==== Frontend (Next.js) ====
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+
+# ==== Common ====
+.env
+.env.local
+.env.*.local
+*.log
+
 ### VS Code ###
 .vscode/
+
+### OS ###
+.DS_Store
+Thumbs.db
